@@ -1,6 +1,6 @@
 {
   "buildCommand": "",
-  "outputDirectory": "Wireframes/Solofront/dist/client",
+  "outputDirectory": "Wireframes/Solofront/dist",
   "rewrites": [
     {
       "source": "/(.*)",
