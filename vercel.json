@@ -1,4 +1,5 @@
 {
+  "buildCommand": "",
   "outputDirectory": "Wireframes/Solofront/dist/client",
   "rewrites": [
     {
