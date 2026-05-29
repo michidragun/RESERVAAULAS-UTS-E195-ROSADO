@@ -1,96 +1,117 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from '../services/supabase'
 
-const AuthContext = createContext({})
+const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(null)
-  const [perfil, setPerfil]   = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [usuario, setUsuario]   = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const iniciado                = useRef(false)
+  const procesando              = useRef(false)
+
+  async function obtenerPerfil(authUser) {
+    if (procesando.current) return
+    procesando.current = true
+
+    try {
+      // Intentar obtener perfil existente
+      let { data: perfil } = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('id', authUser.id)
+        .maybeSingle()
+
+      // Si no existe, crearlo
+      if (!perfil) {
+        const { data: nuevo } = await supabase
+          .from('usuarios')
+          .insert({
+            id: authUser.id,
+            nombre: authUser.user_metadata?.nombre || authUser.email.split('@')[0],
+            email: authUser.email,
+            rol: authUser.user_metadata?.rol || 'docente',
+            identificacion: authUser.user_metadata?.identificacion || '',
+            telefono: '',
+          })
+          .select()
+          .maybeSingle()
+
+        perfil = nuevo
+      }
+
+      setUsuario(perfil)
+    } catch (err) {
+      console.error('Error en obtenerPerfil:', err)
+      setUsuario(null)
+    } finally {
+      procesando.current = false
+      setCargando(false)
+    }
+  }
 
   useEffect(() => {
-    // Carga la sesión una sola vez al inicio
+    if (iniciado.current) return
+    iniciado.current = true
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        setUser(session.user)
-        cargarPerfil(session.user.id)
+        obtenerPerfil(session.user)
       } else {
-        setLoading(false)
+        setCargando(false)
       }
     })
 
-    // Escucha solo LOGIN y LOGOUT
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
-          setUser(session.user)
-          cargarPerfil(session.user.id)
-        }
-        if (event === 'SIGNED_OUT') {
-          setUser(null)
-          setPerfil(null)
-          setLoading(false)
-        }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        obtenerPerfil(session.user)
       }
-    )
+      if (event === 'SIGNED_OUT') {
+        setUsuario(null)
+        setCargando(false)
+      }
+    })
 
     return () => subscription.unsubscribe()
   }, [])
 
-  async function cargarPerfil(uid) {
-    console.log('🔍 Buscando perfil uid:', uid)
-    setLoading(true)
-
-    // Intento 1: buscar perfil existente
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('id', uid)
-      .maybeSingle()
-
-    console.log('📦 Resultado:', data, error)
-
-    if (data) {
-      setPerfil(data)
-      setLoading(false)
-      return
-    }
-
-    // Intento 2: crear perfil si no existe
-    const { data: { user: authUser } } = await supabase.auth.getUser()
-    const nombre = authUser?.user_metadata?.full_name
-      || authUser?.email?.split('@')[0]
-      || 'Usuario'
-
-    const { data: nuevo, error: errCreate } = await supabase
-      .from('usuarios')
-      .insert({
-        id:       uid,
-        nombre,
-        email:    authUser?.email || '',
-        telefono: '',
-        rol:      'user'
-      })
-      .select()
-      .single()
-
-    console.log('➕ Perfil creado:', nuevo, errCreate)
-
-    if (nuevo) setPerfil(nuevo)
-    setLoading(false)
+  async function iniciarSesion(email, contrasena) {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password: contrasena,
+    })
+    if (error) throw error
+    return data
   }
 
-  async function recargarPerfil() {
-    if (user?.id) await cargarPerfil(user.id)
+  async function cerrarSesion() {
+    await supabase.auth.signOut()
+    setUsuario(null)
+    procesando.current = false
+  }
+
+  async function actualizarPerfil(campos) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update(campos)
+      .eq('id', user.id)
+      .select()
+      .maybeSingle()
+    if (error) throw error
+    setUsuario(data)
+    return data
   }
 
   return (
-    <AuthContext.Provider value={{ user, perfil, loading, recargarPerfil }}>
+    <AuthContext.Provider value={{ usuario, cargando, iniciarSesion, cerrarSesion, actualizarPerfil }}>
       {children}
     </AuthContext.Provider>
   )
 }
 
 export function useAuth() {
-  return useContext(AuthContext)
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth debe usarse dentro de AuthProvider')
+  return ctx
 }
